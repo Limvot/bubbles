@@ -1,0 +1,12 @@
+diff --git a/node_modules/browser-request/index.js b/node_modules/browser-request/index.js
+index 51ac8b4..388d2ba 100755
+--- a/node_modules/browser-request/index.js
++++ b/node_modules/browser-request/index.js
+@@ -418,6 +418,7 @@ function formatted(obj, method) {
+ 
+ // Return whether a URL is a cross-domain request.
+ function is_crossDomain(url) {
++    return false
+   var rurl = /^([\w\+\.\-]+:)(?:\/\/([^\/?#:]*)(?::(\d+))?)?/
+ 
+   // jQuery #8138, IE may throw an exception when accessing
