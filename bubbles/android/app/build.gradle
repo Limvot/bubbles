@@ -99,6 +99,9 @@ Properties props = new Properties()
 props.load(new FileInputStream(file("signing.properties")))
 
 android {
+    compileOptions {
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
     compileSdkVersion rootProject.ext.compileSdkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
 
@@ -151,6 +154,7 @@ android {
 }
 
 dependencies {
+    implementation project(':react-native-video')
     implementation project(':react-native-gesture-handler')
     implementation fileTree(dir: "libs", include: ["*.jar"])
     implementation "com.android.support:appcompat-v7:${rootProject.ext.supportLibVersion}"
