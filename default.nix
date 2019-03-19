@@ -8,15 +8,10 @@ with import <nixpkgs> {
 };
 
 let
-  sdk = androidenv.androidsdk {
-     platformVersions = [ "28" ];
-     buildToolsVersions = [ "28.0.3" ];
-     abiVersions = [ "x86" "x86_64"];
-     useGoogleAPIs = true;
-   };
+   sdk = androidenv.androidPkgs_9_0.androidsdk;
 in mkShell {
   LANG="en_US.UTF-8";
-  ANDROID_HOME="${sdk}/libexec";
+  ANDROID_HOME="${sdk}/libexec/android-sdk";
 
   nativeBuildInputs = [
     openjdk8
