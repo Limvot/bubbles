@@ -1,5 +1,15 @@
 import React from 'react'
-import { Button, Text, View, TextInput, FlatList, TouchableWithoutFeedback, YellowBox } from 'react-native';
+import {
+    Button,
+    Text,
+    View,
+    TextInput,
+    FlatList,
+    TouchableWithoutFeedback,
+    YellowBox,
+    AsyncStorage,
+    ActivityIndicator,
+} from 'react-native';
 import { GiftedChat } from 'react-native-gifted-chat'
 import sdk from 'matrix-js-sdk'
 
@@ -91,58 +101,121 @@ export class ChatScreen extends React.Component {
   }
 }
 
+async function loadCreds() {
+    let homeserverUrl = await AsyncStorage.getItem('homeserverUrl');
+    let userId = await AsyncStorage.getItem('userId');
+    let accessToken = await AsyncStorage.getItem('accessToken');
+    let deviceId = await AsyncStorage.getItem('deviceId');
+    if (homeserverUrl && userId && accessToken && deviceId) {
+        return {
+                baseUrl: homeserverUrl,
+                accessToken: accessToken,
+                userId: userId,
+                deviceId: deviceId,
+            };
+    } else {
+        return null;
+    }
+}
+
+async function saveCreds(homeserverUrl, userId, accessToken, deviceId) {
+    await AsyncStorage.setItem('homeserverUrl', homeserverUrl);
+    await AsyncStorage.setItem('userId', userId);
+    await AsyncStorage.setItem('accessToken', accessToken);
+    await AsyncStorage.setItem('deviceId', deviceId);
+}
+
+async function removeCreds() {
+    await AsyncStorage.removeItem('homeserverUrl');
+    await AsyncStorage.removeItem('userId');
+    await AsyncStorage.removeItem('accessToken');
+    await AsyncStorage.removeItem('deviceId');
+}
+
 export class LoginScreen extends React.Component {
     static navigationOptions = {
         title: 'Welcome',
     };
     constructor(props) {
         super(props);
-        this.state = { server: "https://room409.xyz",
+        this.state = { homeserverUrl: "https://room409.xyz",
                        user: "miloignis",
                        password: "hunter2",
+                       loggingIn: false,
         };
+    }
+    componentDidMount() {
+        const {navigate} = this.props.navigation;
+        loadCreds().then(creds => {
+            if (creds != null) {
+                console.log("NOWOW: Restoring previous session")
+                this.setState((previousState) => ({loggingIn: true}));
+                // put storage in here
+                client = sdk.createClient(creds)
+                client.startClient();
+                client.once('sync', (state, prevState, res) => {
+                    console.log("all synced!")
+                    this.setState((previousState) => ({loggingIn: false}));
+                    navigate('Rooms', {somin: 'walla'})
+                })
+            } else {
+                console.log("NOWOW: cannot restore previous session")
+            }
+        });
     }
     render() {
         const {navigate} = this.props.navigation;
-        return (
-            <View>
-                <TextInput
-                    onChangeText={(text) => {
-                        this.setState((previousState) => ({server: text}));
-                    }}
-                    defaultValue={this.state.server}
-                />
-                <TextInput
-                    onChangeText={(text) => {
-                        this.setState((previousState) => ({user: text}));
-                    }}
-                    defaultValue={this.state.user}
-                />
-                <TextInput
-                    onChangeText={(text) => {
-                        this.setState((previousState) => ({password: text}));
-                    }}
-                    defaultValue={this.state.password}
-                />
-                <Button
-                    title="Login"
-                    onPress={() => {
-                        console.log("logging in with " + this.state.server + ", " + this.state.user + ", " + this.state.password)
-                        client = sdk.createClient(this.state.server);
-                        client.login("m.login.password", {"user": this.state.user,
-                                                          "password": this.state.password })
-                            .then((response) => {
-                                console.log("logged in, have token: " + response.access_token)
-                                client.startClient();
-                                client.once('sync', (state, prevState, res) => {
-                                    console.log("all synced!")
-                                    navigate('Rooms', {somin: 'walla'})
-                                })
-                            });
-                    } }
-                />
-            </View>
-        );
+        if (this.state.loggingIn) {
+            return (
+                <View>
+                    <Text>Logging In!</Text>
+                    <ActivityIndicator size="large" />
+                </View>
+            )
+        } else {
+            return (
+                <View>
+                    <TextInput
+                        onChangeText={(text) => {
+                            this.setState((previousState) => ({homeserverUrl: text}));
+                        }}
+                        defaultValue={this.state.homeserverUrl}
+                    />
+                    <TextInput
+                        onChangeText={(text) => {
+                            this.setState((previousState) => ({user: text}));
+                        }}
+                        defaultValue={this.state.user}
+                    />
+                    <TextInput
+                        onChangeText={(text) => {
+                            this.setState((previousState) => ({password: text}));
+                        }}
+                        defaultValue={this.state.password}
+                    />
+                    <Button
+                        title="Login"
+                        onPress={() => {
+                            console.log("logging in with " + this.state.homeserverUrl + ", " + this.state.user + ", " + this.state.password)
+                            client = sdk.createClient(this.state.homeserverUrl);
+                            client.login("m.login.password", {"user": this.state.user,
+                                                              "password": this.state.password })
+                                .then((response) => {
+                                    console.log("logged in, have token: " + response.access_token)
+                                    this.setState((previousState) => ({loggingIn: true}));
+                                    saveCreds(this.state.homeserverUrl, response.user_id, response.access_token, response.device_id)
+                                    client.startClient();
+                                    client.once('sync', (state, prevState, res) => {
+                                        console.log("all synced!")
+                                        this.setState((previousState) => ({loggingIn: false}));
+                                        navigate('Rooms', {somin: 'walla'})
+                                    })
+                                });
+                        } }
+                    />
+                </View>
+            )
+        }
     }
 }
 function getRooms() {
@@ -181,6 +254,15 @@ export class RoomsScreen extends React.Component {
         const {navigate} = this.props.navigation;
         return (
             <View>
+                <Button
+                    title="Logout"
+                    onPress={() => {
+                        removeCreds();
+                        client.removeAllListeners();
+                        client = null;
+                        navigate('Login');
+                    } }
+                />
                 <FlatList
                     data={this.state.rooms}
                     renderItem={({item}) =>
