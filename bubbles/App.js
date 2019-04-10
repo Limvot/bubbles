@@ -11,7 +11,11 @@ import {
     ActivityIndicator,
 } from 'react-native';
 import { GiftedChat } from 'react-native-gifted-chat'
+import RNFS from 'react-native-fs'
+//import {NotificationsAndroid} from 'react-native-notifications'
 import sdk from 'matrix-js-sdk'
+
+rnfs_dir = RNFS.DocumentDirectoryPath;
 
 YellowBox.ignoreWarnings(['Setting a timer'])
 
@@ -101,6 +105,173 @@ export class ChatScreen extends React.Component {
   }
 }
 
+function inherits(ctor, superCtor) {
+    // Add inherits from Node.js
+    // Source:
+    // https://github.com/joyent/node/blob/master/lib/util.js
+    // Copyright Joyent, Inc. and other Node contributors.
+    //
+    // Permission is hereby granted, free of charge, to any person obtaining a
+    // copy of this software and associated documentation files (the
+    // "Software"), to deal in the Software without restriction, including
+    // without limitation the rights to use, copy, modify, merge, publish,
+    // distribute, sublicense, and/or sell copies of the Software, and to permit
+    // persons to whom the Software is furnished to do so, subject to the
+    // following conditions:
+    //
+    // The above copyright notice and this permission notice shall be included
+    // in all copies or substantial portions of the Software.
+    //
+    // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    // OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+    // NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+    // DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+    // USE OR OTHER DEALINGS IN THE SOFTWARE.
+    ctor.super_ = superCtor;
+    ctor.prototype = Object.create(superCtor.prototype, {
+        constructor: {
+            value: ctor,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+        },
+    });
+}
+
+const AsyncDBStore = function AsyncDBStore(opts) {
+    sdk.MatrixInMemoryStore.call(this, opts);
+    this.startedUp = false;
+    this._syncTs = 0;
+    this._userModifiedMap = {
+        // user_id: timestamp
+    };
+    this._syncAccumulator = new sdk.SyncAccumulator();
+}
+inherits(AsyncDBStore, sdk.MatrixInMemoryStore);
+
+AsyncDBStore.prototype.startup = function() {
+    console.log("starting up!");
+    return RNFS.readFile(rnfs_dir + '/persisted_data').then((saved) => {
+        if (saved) {
+            console.log("had saved data!");
+            saved = JSON.parse(saved);
+            this._syncAccumulator.accumulate({
+                next_batch: saved.nextBatch,
+                rooms: saved.rooms,
+                groups: saved.groups,
+                account_data: {
+                    events: saved.account_data_events,
+                },
+            });
+            saved.user_presence_events.forEach((userId, rawEvent) => {
+                const u = new sdk.User(userId);
+                if (rawEvent) {
+                    u.setPresenceEvent(new sdk.MatrixEvent(rawEvent));
+                }
+                this._userModifiedMap[u.userId] = u.getLastModifiedTime();
+                this.storeUser(u);
+            });
+        }
+    }).catch((err) => {
+        console.log(err.message);
+    });
+};
+AsyncDBStore.prototype.getSavedSync = function() {
+    console.log("getting saved sync")
+    const data = this._syncAccumulator.getJSON();
+    if (!data.nextBatch)
+        return Promise.resolve(null);
+    let copied = JSON.parse(JSON.stringify(data));
+    return Promise.resolve(copied);
+}
+AsyncDBStore.prototype.isNewlyCreated = function() {
+    console.log("getting is newly created")
+    return RNFS.exists(rnfs_dir + '/persisted_data').then((exists) => !exists);
+}
+AsyncDBStore.prototype.getSavedSyncToken = function() {
+    console.log("getting saved sync token")
+    var token = this._syncAccumulator.getNextBatchToken();
+    console.log(token);
+    return Promise.resolve(token);
+}
+AsyncDBStore.prototype.deleteAllData = function() {
+    throw 'hahahaha';
+}
+WRITE_DELAY_MS = 1000*60*1; // every minute
+AsyncDBStore.prototype.wantsSave = function() {
+    console.log("getting wantsSave")
+    return Date.now() - this._syncTs > WRITE_DELAY_MS;
+}
+AsyncDBStore.prototype._reallySave = async function() {
+    console.log("really saving")
+    this._syncTs = Date.now();
+    const syncData = this._syncAccumulator.getJSON();
+    let saved = {
+        nextBatch: syncData.nextBatch,
+        rooms: syncData.roomsData,
+        groups: syncData.groupsData,
+        account_data_events: new Map(),
+        user_presence_events: new Map(),
+    };
+    for (const u of this.getUsers()) {
+        if (this._userModifiedMap[u.userId] === u.getLastModifiedTime())
+            continue;
+        if (!u.events.presence)
+            continue;
+        saved.user_presence_events.set(u.userId, u.events.presence.event);
+        this._userModifiedMap[u.userId] = u.getLastModifiedTime();
+    }
+
+    for (let i = 0; i < syncData.accountData.length; i++) {
+        saved.account_data_events.set(syncData.accountData[i].type, syncData.accountData[i]);
+    }
+    console.log("persisting data");
+    await RNFS.writeFile(rnfs_dir + '/persisted_data', JSON.stringify(saved));
+}
+AsyncDBStore.prototype.save = function() {
+    console.log("calling save")
+    if (this.wantsSave()) {
+        return this._reallySave();
+    }
+    return Promise.resolve();
+}
+AsyncDBStore.prototype.setSyncData = function(syncData) {
+    console.log("calling setSyncData")
+    return Promise.resolve().then(() => {
+        this._syncAccumulator.accumulate(syncData)
+    });
+}
+AsyncDBStore.prototype.getOutOfBandMembers = function(roomId) {
+    console.log("getting oob_members")
+    RNFS.readFile(rnfs_dir + '/oob_members_' + roomId).then(data => JSON.parse(data))
+}
+AsyncDBStore.prototype.setOutOfBandMembers = async function(roomId, membershipEvents) {
+    console.log("setting oob_members")
+    await RNFS.writeFile(rnfs_dir + '/oob_members_' + roomId, JSON.stringify(membershipEvents));
+}
+AsyncDBStore.prototype.clearOutOfBandMembers = async function(roomId) {
+    console.log("clearing oob_members")
+    await RNFS.unlink(rnfs_dir + '/oob_members_' + roomId);
+}
+AsyncDBStore.prototype.getClientOptions = function() {
+    console.log("gettting client_options")
+    RNFS.readFile(rnfs_dir + '/client_options').then(data => {
+        console.log("the saved client_options are");
+        JSON.parse(data);
+    })
+}
+AsyncDBStore.prototype.storeClientOptions = async function(options) {
+    console.log("setting client_options")
+    await RNFS.writeFile(rnfs_dir + '/client_options', JSON.stringify(options));
+}
+
+function getStore() {
+    console.log("getting store");
+    return new AsyncDBStore();
+}
+
 async function loadCreds() {
     let homeserverUrl = await AsyncStorage.getItem('homeserverUrl');
     let userId = await AsyncStorage.getItem('userId');
@@ -151,13 +322,16 @@ export class LoginScreen extends React.Component {
                 console.log("NOWOW: Restoring previous session")
                 this.setState((previousState) => ({loggingIn: true}));
                 // put storage in here
+                creds.store = getStore();
                 client = sdk.createClient(creds)
-                client.startClient();
-                client.once('sync', (state, prevState, res) => {
-                    console.log("all synced!")
-                    this.setState((previousState) => ({loggingIn: false}));
-                    navigate('Rooms', {somin: 'walla'})
-                })
+                client.store.startup().then(() => {
+                    client.startClient();
+                    client.once('sync', (state, prevState, res) => {
+                        console.log("all synced!")
+                        this.setState((previousState) => ({loggingIn: false}));
+                        navigate('Rooms', {somin: 'walla'})
+                    })
+                });
             } else {
                 console.log("NOWOW: cannot restore previous session")
             }
@@ -197,19 +371,23 @@ export class LoginScreen extends React.Component {
                         title="Login"
                         onPress={() => {
                             console.log("logging in with " + this.state.homeserverUrl + ", " + this.state.user + ", " + this.state.password)
-                            client = sdk.createClient(this.state.homeserverUrl);
+                            let opts = { baseUrl: this.state.homeserverUrl };
+                            opts.store = getStore();
+                            client = sdk.createClient(opts);
                             client.login("m.login.password", {"user": this.state.user,
                                                               "password": this.state.password })
                                 .then((response) => {
                                     console.log("logged in, have token: " + response.access_token)
                                     this.setState((previousState) => ({loggingIn: true}));
                                     saveCreds(this.state.homeserverUrl, response.user_id, response.access_token, response.device_id)
-                                    client.startClient();
-                                    client.once('sync', (state, prevState, res) => {
-                                        console.log("all synced!")
-                                        this.setState((previousState) => ({loggingIn: false}));
-                                        navigate('Rooms', {somin: 'walla'})
-                                    })
+                                    client.store.startup().then(() => {
+                                        client.startClient();
+                                        client.once('sync', (state, prevState, res) => {
+                                            console.log("all synced!")
+                                            this.setState((previousState) => ({loggingIn: false}));
+                                            navigate('Rooms', {somin: 'walla'})
+                                        })
+                                    });
                                 });
                         } }
                     />
@@ -247,6 +425,13 @@ export class RoomsScreen extends React.Component {
     componentWillMount() {
         this.setState(previousState => ({ rooms: getRooms() }));
         client.on("Room.timeline", (event, room, toStartOfTimeline) => {
+            //if (event.getType() == "m.room.message") {
+                //NotificationsAndroid.localNotification({
+                    //title: "First notification",
+                    //body: event.getContent().body,
+                    //extra: "data",
+                //});
+            //}
             this.setState(previousState => ({ rooms: getRooms() }));
         })
     }
